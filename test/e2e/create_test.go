@@ -20,26 +20,35 @@ func k0sindBin(t *testing.T) string {
 	return ""
 }
 
+// Timeouts are deliberately generous: they are only reached when something is
+// genuinely stuck, since both waits return as soon as the cluster converges.
+// A 2-vCPU CI runner pulling a CNI image is several times slower than a laptop,
+// and the job's own timeout-minutes is the real guard against a hung run.
+const (
+	nodesReadyTimeout = 4 * time.Minute // k0sind create --wait
+	podsReadyTimeout  = 5 * time.Minute // every pod Ready after that
+)
+
 func TestCreateSingleNode(t *testing.T) {
 	t.Parallel()
-	runScenario(t, "ci-single", nil, 1, 120*time.Second)
+	runScenario(t, "ci-single", nil, 1)
 }
 
 func TestCreateOneControlPlaneTwoWorkers(t *testing.T) {
 	t.Parallel()
-	runScenario(t, "ci-multi", []string{"--config", "../../examples/multi-node.yaml"}, 3, 180*time.Second)
+	runScenario(t, "ci-multi", []string{"--config", "../../examples/multi-node.yaml"}, 3)
 }
 
 func TestCreateWithCalico(t *testing.T) {
 	t.Parallel()
-	runScenario(t, "ci-calico", []string{"--k0s-config", "../../examples/k0s-calico.yaml"}, 1, 120*time.Second)
+	runScenario(t, "ci-calico", []string{"--k0s-config", "../../examples/k0s-calico.yaml"}, 1)
 	// Verify Calico is the active network provider (not the default kube-router).
 	assertPodExists(t, "ci-calico-control-plane", "kube-system", "calico-node")
 }
 
 func TestCreateWithOpenEBS(t *testing.T) {
 	t.Parallel()
-	runScenario(t, "ci-openebs", []string{"--k0s-config", "../../examples/k0s-openebs.yaml"}, 1, 180*time.Second)
+	runScenario(t, "ci-openebs", []string{"--k0s-config", "../../examples/k0s-openebs.yaml"}, 1)
 	// Verify the OpenEBS helm extension deployed pods.
 	assertPodExists(t, "ci-openebs-control-plane", "openebs", "openebs")
 }
@@ -64,7 +73,7 @@ func assertPodExists(t *testing.T, cp, namespace, substr string) {
 
 // runScenario creates a cluster, asserts the expected number of Ready nodes,
 // schedules a pod, then deletes the cluster and verifies cleanup.
-func runScenario(t *testing.T, name string, extraArgs []string, wantNodes int, wait time.Duration) {
+func runScenario(t *testing.T, name string, extraArgs []string, wantNodes int) {
 	bin := k0sindBin(t)
 	cp := name + "-control-plane"
 
@@ -76,7 +85,7 @@ func runScenario(t *testing.T, name string, extraArgs []string, wantNodes int, w
 		}
 	})
 
-	args := append([]string{"create", "cluster", "--name", name, "--wait", wait.String()}, extraArgs...)
+	args := append([]string{"create", "cluster", "--name", name, "--wait", nodesReadyTimeout.String()}, extraArgs...)
 	if err := run(t, bin, args...); err != nil {
 		t.Fatalf("%s create cluster: %v", markFail, err)
 	}
@@ -105,7 +114,7 @@ func runScenario(t *testing.T, name string, extraArgs []string, wantNodes int, w
 	}
 	// ...and the whole cluster (system pods across every node + our probe) must
 	// converge to Ready.
-	waitClusterPodsReady(t, cp, 120*time.Second)
+	waitClusterPodsReady(t, cp, podsReadyTimeout)
 }
 
 // tickInterval is how often to log a heartbeat while nothing moves.
